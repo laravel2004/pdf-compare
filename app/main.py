@@ -1,22 +1,24 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form
+from fastapi.responses import JSONResponse, StreamingResponse
 import hashlib
-from PyPDF2 import PdfReader
+from PyPDF2 import PdfReader, PdfWriter
 import fitz
 from PIL import Image
 import imagehash
 import io
+import qrcode
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
 
-app = FastAPI()
+app = FastAPI(title="PDF Compare & QR API")
 
-# Fungsi hitung SHA256 file dari bytes
 def sha256_file_bytes(file_bytes, block_size=65536):
     h = hashlib.sha256()
     for i in range(0, len(file_bytes), block_size):
         h.update(file_bytes[i:i+block_size])
     return h.hexdigest()
 
-# Fungsi ekstrak teks dan hitung hash teks dari bytes
 def text_hash_bytes(file_bytes):
     try:
         reader = PdfReader(io.BytesIO(file_bytes))
@@ -28,7 +30,6 @@ def text_hash_bytes(file_bytes):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"PDF text extraction failed: {str(e)}")
 
-# Fungsi hitung pHash tiap halaman dari bytes
 def pdf_page_hashes_bytes(file_bytes, zoom=1.0, hash_size=16):
     try:
         doc = fitz.open(stream=file_bytes, filetype="pdf")
@@ -45,7 +46,6 @@ def pdf_page_hashes_bytes(file_bytes, zoom=1.0, hash_size=16):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"PDF page hashing failed: {str(e)}")
 
-# Fungsi compare visual pHash per halaman dari bytes
 def compare_pdf_visual_bytes(bytes_a, bytes_b, max_hamming_per_page=6, match_ratio_threshold=0.8):
     ha = pdf_page_hashes_bytes(bytes_a)
     hb = pdf_page_hashes_bytes(bytes_b)
@@ -89,3 +89,46 @@ async def compare_pdfs_api(file_a: UploadFile = File(...), file_b: UploadFile = 
         "text_b": text_b,
     }
     return JSONResponse(content=result)
+
+@app.post("/add-qr")
+async def add_qr_to_pdf(
+    file: UploadFile = File(...),
+    u_key: str = Form(...),
+    id: str = Form(...)
+):
+    if file.content_type != "application/pdf":
+        raise HTTPException(status_code=400, detail="File must be a PDF")
+
+    pdf_bytes = await file.read()
+
+    qr_data = f"https://yourdomain.com/verify?u_key={u_key}&id={id}"
+    qr_img = qrcode.make(qr_data)
+
+    qr_buffer = io.BytesIO()
+    qr_img.save(qr_buffer, format="PNG")
+    qr_buffer.seek(0)
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    page = doc[-1]
+    rect = page.rect
+
+    qr_size = 80
+    x = rect.width - qr_size - 20
+    y = rect.height - qr_size - 20
+
+    page.insert_image(
+        fitz.Rect(x, y, x + qr_size, y + qr_size),
+        stream=qr_buffer.getvalue(),
+        keep_proportion=True
+    )
+
+    output_pdf = io.BytesIO()
+    doc.save(output_pdf, garbage=4, deflate=True)
+    doc.close()
+    output_pdf.seek(0)
+
+    return StreamingResponse(
+        output_pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=pdf_with_qr.pdf"}
+    )

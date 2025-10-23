@@ -5,3 +5,5 @@ pymupdf
 Pillow
 imagehash
 python-multipart
+qrcode[pil]
+reportlab
