@@ -1,7 +1,10 @@
-version : "3.8"
+version: "3.8"
+
 services:
-  app :
+  app:
     build: app/
     ports:
-        - "8080:8000"
+      - "8080:8000"
+    volumes:
+      - ./app:/app
     restart: unless-stopped
