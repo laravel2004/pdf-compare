@@ -1,17 +1,23 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.responses import JSONResponse, StreamingResponse
 import hashlib
-from PyPDF2 import PdfReader, PdfWriter
+from PyPDF2 import PdfReader
 import fitz
 from PIL import Image
 import imagehash
 import io
 import qrcode
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import mm
+from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="PDF Compare & QR API")
+app = FastAPI(title="PDF Compare & QR API PT Rejoso Manis Indo")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 def sha256_file_bytes(file_bytes, block_size=65536):
     h = hashlib.sha256()
@@ -50,11 +56,7 @@ def compare_pdf_visual_bytes(bytes_a, bytes_b, max_hamming_per_page=6, match_rat
     ha = pdf_page_hashes_bytes(bytes_a)
     hb = pdf_page_hashes_bytes(bytes_b)
     n = min(len(ha), len(hb))
-    matches = 0
-    for i in range(n):
-        d = ha[i] - hb[i]
-        if d <= max_hamming_per_page:
-            matches += 1
+    matches = sum(1 for i in range(n) if ha[i] - hb[i] <= max_hamming_per_page)
     ratio = matches / n if n > 0 else 0
     return {
         "pages_a": len(ha),
@@ -75,60 +77,69 @@ async def compare_pdfs_api(file_a: UploadFile = File(...), file_b: UploadFile = 
 
     sha_a = sha256_file_bytes(bytes_a)
     sha_b = sha256_file_bytes(bytes_b)
-
     text_hash_a, text_a = text_hash_bytes(bytes_a)
     text_hash_b, text_b = text_hash_bytes(bytes_b)
-
     visual_res = compare_pdf_visual_bytes(bytes_a, bytes_b)
 
-    result = {
+    return JSONResponse(content={
         "sha256": {"file_a": sha_a, "file_b": sha_b, "identical": sha_a == sha_b},
         "text_hash": {"file_a": text_hash_a, "file_b": text_hash_b, "identical": text_hash_a == text_hash_b},
         "visual": visual_res,
         "text_a": text_a,
         "text_b": text_b,
-    }
-    return JSONResponse(content=result)
+    })
 
 @app.post("/add-qr")
 async def add_qr_to_pdf(
     file: UploadFile = File(...),
     u_key: str = Form(...),
-    id: str = Form(...)
+    id: str = Form(...),
+    x: float = Form(...),
+    y: float = Form(...),
+    page: int = Form(...),
+    pageWidth: float = Form(...),
+    pageHeight: float = Form(...),
 ):
+
     if file.content_type != "application/pdf":
-        raise HTTPException(status_code=400, detail="File must be a PDF")
+        raise HTTPException(status_code=400, detail="File harus PDF")
 
     pdf_bytes = await file.read()
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+    if page < 1 or page > len(doc):
+        raise HTTPException(status_code=400, detail="Nomor halaman tidak valid")
+
+    target_page = doc.load_page(page - 1)
+
+    pdf_width = target_page.rect.width
+    pdf_height = target_page.rect.height
+
+    x_ratio = x / pageWidth
+    y_ratio = y / pageHeight
+
+    pdf_x = x_ratio * pdf_width
+
+    pdf_y = y_ratio * pdf_height
 
     qr_data = f"http://192.168.101.42:3007/verified-document/{id}"
     qr_img = qrcode.make(qr_data)
-
     qr_buffer = io.BytesIO()
     qr_img.save(qr_buffer, format="PNG")
-    qr_buffer.seek(0)
 
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    page = doc[-1]
-    rect = page.rect
+    qr_size_pdf = 80.0
 
-    qr_size = 80
-    x = rect.width - qr_size - 20
-    y = rect.height - qr_size - 20
+    rect = fitz.Rect(pdf_x, pdf_y, pdf_x + qr_size_pdf, pdf_y + qr_size_pdf)
 
-    page.insert_image(
-        fitz.Rect(x, y, x + qr_size, y + qr_size),
-        stream=qr_buffer.getvalue(),
-        keep_proportion=True
-    )
+    target_page.insert_image(rect, stream=qr_buffer.getvalue())
 
-    output_pdf = io.BytesIO()
-    doc.save(output_pdf, garbage=4, deflate=True)
+    output = io.BytesIO()
+    doc.save(output)
     doc.close()
-    output_pdf.seek(0)
+    output.seek(0)
 
     return StreamingResponse(
-        output_pdf,
+        output,
         media_type="application/pdf",
-        headers={"Content-Disposition": "attachment; filename=pdf_with_qr.pdf"}
+        headers={"Content-Disposition": "inline; filename=pdf_with_qr.pdf"},
     )
