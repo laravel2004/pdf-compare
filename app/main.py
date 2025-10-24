@@ -101,7 +101,7 @@ async def add_qr_to_pdf(
 
     pdf_bytes = await file.read()
 
-    qr_data = f"https://yourdomain.com/verify?u_key={u_key}&id={id}"
+    qr_data = f"http://192.168.101.42:3007/verified-document/{id}"
     qr_img = qrcode.make(qr_data)
 
     qr_buffer = io.BytesIO()
