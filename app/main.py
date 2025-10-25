@@ -127,7 +127,7 @@ async def add_qr_to_pdf(
     qr_buffer = io.BytesIO()
     qr_img.save(qr_buffer, format="PNG")
 
-    qr_size_pdf = 80.0
+    qr_size_pdf = 60.0
 
     rect = fitz.Rect(pdf_x, pdf_y, pdf_x + qr_size_pdf, pdf_y + qr_size_pdf)
 
